@@ -1,0 +1,190 @@
+You are Cursor. Implement the Solidity smart contracts for my hybrid Web2/Web3 crowdfunding project EXACTLY per the proposal requirements. Deliver production-grade code with best practices, full unit tests, and clear docs.
+
+===============================================================================
+0) CONTEXT (MUST MATCH THE PROPOSAL)
+===============================================================================
+We have a hybrid architecture: Frontend + Backend + Smart Contracts + Indexer + Message Broker + IPFS.
+Blockchain is used ONLY for trust-critical financial logic; backend stores non-chain data.
+
+Smart contract logic required by proposal:
+- Use Factory–Campaign pattern:
+  - A Factory contract creates a new independent Campaign contract per crowdfunding campaign.
+  - Factory stores and exposes created campaign addresses.
+- Campaign creation: createCampaign(goal, deadline, cid)
+  - goal: fundraising target in wei (ETH)
+  - deadline: timestamp (unix seconds)
+  - cid: IPFS CID for immutable campaign content (metadata/images/text)
+- Donation: donate() payable
+- Withdraw: withdraw() for campaign creator when funding success
+- Refund: refund() for donors when funding fails (goal not met by deadline)
+- Events MUST exist for indexer:
+  - CampaignCreated, DonationReceived, Withdrawn, Refunded
+  - Emit events for every meaningful state change so indexer can sync backend DB.
+- Campaign lifecycle states per proposal:
+  - Created -> Active -> Success/Failure -> Closed
+
+Security controls per proposal:
+- nonReentrant on money-moving functions
+- strict require checks to prevent early/duplicate withdrawals and invalid refunds
+- campaign ownership enforced via creator address
+- robust event design for off-chain tracking (indexer)
+- simple, clear state transitions + auditable trail
+
+NOTE: Backers interact via wallet (e.g., MetaMask). Backend DOES NOT custody user funds.
+
+===============================================================================
+1) DELIVERABLES (WHAT TO CREATE)
+===============================================================================
+A) Solidity contracts:
+  - contracts/CampaignFactory.sol
+  - contracts/Campaign.sol
+
+B) Test suite (choose ONE framework and implement fully):
+  - Hardhat + ethers + chai (preferred), OR Foundry if faster
+  - Must cover all happy paths and failure cases
+  - Must assert emitted events and their fields precisely (indexer relies on them)
+
+C) Deployment helper (Hardhat script if using Hardhat):
+  - scripts/deploy.ts
+  - include example of creating a campaign and donating
+
+D) Documentation:
+  - README.md: how to run local chain, deploy, test, and basic usage
+  - NatSpec comments in contracts
+
+===============================================================================
+2) TECHNICAL REQUIREMENTS (DO NOT SKIP)
+===============================================================================
+Solidity:
+- Use Solidity ^0.8.20+ (safe arithmetic).
+- Use OpenZeppelin:
+  - ReentrancyGuard
+  - (Optional) Ownable where appropriate, but creator ownership is usually enough.
+- Use custom errors (gas efficient) instead of revert strings where practical.
+- Use Checks-Effects-Interactions pattern.
+- Use call{value: ...}("") for ETH transfers; never use transfer().
+- Ensure all ETH flows are safe, idempotent, and cannot be abused.
+
+Factory–Campaign:
+- Factory can deploy Campaign contracts and track them.
+- Factory should emit CampaignCreated(factory, campaign, creator, goal, deadline, cid).
+- Factory should expose getters:
+  - getCampaigns() returns list
+  - optionally getCampaignsByCreator(address) (nice-to-have)
+
+Campaign state machine:
+- Enforce:
+  - donate only when Active and before deadline
+  - withdraw only by creator when success and not already withdrawn
+  - refund only by donors when deadline passed AND goal not met AND not already refunded
+- Determine success:
+  - If totalRaised >= goal at/after deadline OR immediately once reached (choose a consistent rule and document it).
+  - Proposal implies: if collected >= goal => withdraw allowed; if not met by deadline => refund.
+  - Implement: success is true when totalRaised >= goal (even before deadline). BUT refunds only possible after deadline and only if totalRaised < goal.
+- Closed:
+  - Campaign becomes Closed after creator withdraws OR after all refunds are processed (at minimum, after creator withdraw, it’s closed).
+  - Because refunds happen per-donor, you can define Closed as:
+    - closed = withdrawn == true OR (deadline passed and totalRaised < goal and some refunds may still occur)
+  - To keep it simple and per proposal: a campaign is “Closed” once withdraw OR refund is executed (and is final for that caller). The lifecycle is for UI; on-chain we track flags.
+
+Accounting:
+- mapping(address => uint256) contributions
+- totalRaised increments on donate
+- refund reduces contributor balance (set to 0) and transfers ETH back
+- withdraw transfers entire contract balance to creator (or totalRaised), then marks withdrawn.
+
+Events (indexer-critical):
+- DonationReceived(campaign, donor, amount, newTotalRaised, timestamp)
+- Withdrawn(campaign, creator, amount, timestamp)
+- Refunded(campaign, donor, amount, timestamp)
+Include enough fields to allow backend updates without extra chain calls.
+
+Edge cases to handle:
+- donate with 0 value => revert
+- donate after deadline => revert
+- refund before deadline => revert
+- refund when goal met => revert
+- refund twice => revert
+- withdraw by non-creator => revert
+- withdraw when goal not met => revert
+- withdraw twice => revert
+- deadline must be in the future at creation => revert
+- goal must be > 0 => revert
+- CID must be non-empty (or allow empty but document) => prefer non-empty
+- Accept multiple donations by same address (aggregate contributions)
+
+Gas & storage:
+- Keep structs minimal
+- Prefer immutable for creator/goal/deadline where possible
+
+===============================================================================
+3) PROJECT STRUCTURE (HARDHAT PREFERRED)
+===============================================================================
+If using Hardhat:
+- Initialize a minimal Hardhat TS project.
+- Install @openzeppelin/contracts
+- Add compiler config
+- Implement tests under test/
+- Provide npm scripts: test, coverage (optional)
+
+===============================================================================
+4) TEST PLAN (MUST IMPLEMENT)
+===============================================================================
+Write tests that cover at least:
+
+Factory:
+- createCampaign deploys a new Campaign
+- emits CampaignCreated with correct fields
+- stores campaign in list
+- rejects invalid goal/deadline/cid
+
+Campaign donate:
+- accepts donations before deadline
+- updates contributions and totalRaised
+- emits DonationReceived
+- rejects zero donation
+- rejects donation after deadline
+
+Campaign success + withdraw:
+- when totalRaised >= goal, creator can withdraw
+- withdraw transfers expected amount and sets withdrawn flag
+- emits Withdrawn
+- cannot withdraw twice
+- cannot withdraw by non-creator
+
+Campaign failure + refund:
+- if deadline passed and totalRaised < goal, donor can refund
+- refund returns correct amount, zeros contribution
+- emits Refunded
+- cannot refund twice
+- cannot refund before deadline
+- cannot refund if totalRaised >= goal
+
+Reentrancy:
+- confirm nonReentrant is applied (at least compile-time presence + behavior via malicious contract test if time)
+
+Events:
+- assert every critical function emits correct event fields (indexer is event-driven)
+
+===============================================================================
+5) IMPLEMENTATION NOTES (IMPORTANT)
+===============================================================================
+- Keep it simple: no upgradeability unless explicitly required (proposal favors Factory–Campaign for versioning).
+- No ERC20 token required unless proposal explicitly says token; use ETH contributions.
+- Provide view functions:
+  - getSummary() returning creator, goal, deadline, totalRaised, withdrawn, cid
+  - contributionOf(address)
+  - isActive(), isSuccessful(), isFailed()
+
+===============================================================================
+6) OUTPUT FORMAT
+===============================================================================
+Return:
+1) All Solidity files content
+2) All test files content
+3) Hardhat config + package.json changes
+4) README with commands and local dev steps
+
+Do NOT leave TODOs. Everything must compile and tests must pass.
+
+Now implement it.
