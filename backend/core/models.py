@@ -181,3 +181,91 @@ class Event(models.Model):
     def __str__(self):
         return f"Event {self.event_name} at block {self.block_number}"
 
+
+# =============================================================================
+# Django-Managed Models (managed=True)
+# =============================================================================
+
+class CampaignMetadata(models.Model):
+    """Cached IPFS metadata for campaigns.
+    
+    This model is managed by Django (managed=True) and stores metadata
+    fetched from IPFS for campaigns. It provides Kickstarter-like content
+    including titles, descriptions, images, and categories.
+    """
+    
+    CATEGORY_CHOICES = [
+        ('technology', 'Technology'),
+        ('art', 'Art & Creative'),
+        ('music', 'Music'),
+        ('film', 'Film & Video'),
+        ('games', 'Games'),
+        ('publishing', 'Publishing'),
+        ('food', 'Food & Craft'),
+        ('fashion', 'Fashion & Design'),
+        ('environment', 'Environment'),
+        ('community', 'Community'),
+        ('health', 'Health & Wellness'),
+        ('education', 'Education'),
+        ('sports', 'Sports'),
+        ('travel', 'Travel & Adventure'),
+        ('charity', 'Charity & Nonprofit'),
+        ('other', 'Other'),
+    ]
+    
+    id = models.AutoField(primary_key=True)
+    campaign = models.OneToOneField(
+        Campaign,
+        on_delete=models.CASCADE,
+        to_field='address',
+        db_column='campaign_address',
+        related_name='metadata'
+    )
+    cid = models.CharField(max_length=255, help_text='IPFS Content Identifier')
+    
+    # Basic info
+    name = models.CharField(max_length=255, null=True, blank=True)
+    description = models.TextField(null=True, blank=True)
+    short_description = models.CharField(max_length=500, null=True, blank=True)
+    
+    # Media
+    image_cid = models.CharField(max_length=255, null=True, blank=True, help_text='IPFS CID for main image')
+    banner_cid = models.CharField(max_length=255, null=True, blank=True, help_text='IPFS CID for banner image')
+    
+    # Categorization
+    category = models.CharField(max_length=100, choices=CATEGORY_CHOICES, null=True, blank=True)
+    tags = models.JSONField(null=True, blank=True, default=list, help_text='List of tags')
+    
+    # Location
+    location = models.CharField(max_length=255, null=True, blank=True)
+    
+    # Creator info
+    creator_name = models.CharField(max_length=255, null=True, blank=True)
+    creator_avatar_cid = models.CharField(max_length=255, null=True, blank=True)
+    
+    # Social links
+    website_url = models.URLField(max_length=512, null=True, blank=True)
+    twitter_handle = models.CharField(max_length=100, null=True, blank=True)
+    discord_url = models.URLField(max_length=512, null=True, blank=True)
+    
+    # Raw data
+    raw_json = models.JSONField(null=True, blank=True, help_text='Complete raw JSON from IPFS')
+    
+    # Timestamps
+    ipfs_fetched_at = models.DateTimeField(null=True, blank=True, help_text='When metadata was fetched from IPFS')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        managed = True  # Django will create and manage this table
+        db_table = 'campaign_metadata'
+        verbose_name = 'Campaign Metadata'
+        verbose_name_plural = 'Campaign Metadata'
+        indexes = [
+            models.Index(fields=['category']),
+            models.Index(fields=['name']),
+        ]
+    
+    def __str__(self):
+        return f"Metadata for {self.campaign_id}: {self.name or 'Unnamed'}"
+

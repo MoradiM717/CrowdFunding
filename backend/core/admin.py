@@ -1,11 +1,15 @@
 """Django admin configuration for blockchain models."""
 
 import json
+import logging
 from django.contrib import admin
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
-from core.models import Chain, SyncState, Campaign, Contribution, Event
+from django.conf import settings
+from core.models import Chain, SyncState, Campaign, Contribution, Event, CampaignMetadata
 from core.utils.formatting import wei_to_eth, timestamp_to_datetime
+
+logger = logging.getLogger(__name__)
 
 # Customize admin site
 admin.site.site_header = "Crowdfunding Backend Administration"
@@ -359,4 +363,164 @@ class EventAdmin(admin.ModelAdmin):
         count = queryset.count()
         queryset.delete()
         self.message_user(request, f'Deleted {count} event(s).')
+
+
+@admin.register(CampaignMetadata)
+class CampaignMetadataAdmin(admin.ModelAdmin):
+    """Admin for CampaignMetadata model."""
+    
+    list_display = [
+        'id',
+        'campaign_address_short',
+        'name',
+        'category',
+        'image_preview',
+        'ipfs_fetched_at',
+        'updated_at'
+    ]
+    list_filter = ['category', 'ipfs_fetched_at']
+    search_fields = ['campaign__address', 'name', 'description', 'creator_name']
+    readonly_fields = [
+        'id',
+        'campaign',
+        'cid',
+        'image_preview_large',
+        'banner_preview',
+        'formatted_raw_json',
+        'ipfs_fetched_at',
+        'created_at',
+        'updated_at'
+    ]
+    
+    fieldsets = (
+        ('Campaign', {
+            'fields': ('id', 'campaign', 'cid')
+        }),
+        ('Basic Info', {
+            'fields': ('name', 'short_description', 'description', 'category', 'tags', 'location')
+        }),
+        ('Media', {
+            'fields': (
+                ('image_cid', 'image_preview_large'),
+                ('banner_cid', 'banner_preview')
+            )
+        }),
+        ('Creator Info', {
+            'fields': ('creator_name', 'creator_avatar_cid')
+        }),
+        ('Social Links', {
+            'fields': ('website_url', 'twitter_handle', 'discord_url')
+        }),
+        ('Raw Data', {
+            'fields': ('formatted_raw_json',),
+            'classes': ('collapse',)
+        }),
+        ('Timestamps', {
+            'fields': ('ipfs_fetched_at', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    actions = ['refresh_metadata_from_ipfs', 'clear_metadata_cache']
+    
+    def campaign_address_short(self, obj):
+        """Display shortened campaign address."""
+        addr = obj.campaign.address
+        return f"{addr[:10]}...{addr[-6:]}"
+    campaign_address_short.short_description = 'Campaign'
+    
+    def _get_gateway_url(self):
+        """Get the IPFS gateway URL."""
+        gateway = getattr(settings, 'IPFS_GATEWAY_URL', 'https://ipfs.io/ipfs/')
+        if not gateway.endswith('/'):
+            gateway += '/'
+        return gateway
+    
+    def _resolve_ipfs_url(self, cid):
+        """Resolve an IPFS CID to a gateway URL."""
+        if not cid:
+            return None
+        if cid.startswith('ipfs://'):
+            cid = cid[7:]
+        return f"{self._get_gateway_url()}{cid}"
+    
+    def image_preview(self, obj):
+        """Display small image preview in list."""
+        if obj.image_cid:
+            url = self._resolve_ipfs_url(obj.image_cid)
+            return format_html(
+                '<img src="{}" style="max-height: 50px; max-width: 80px; object-fit: cover;" />',
+                url
+            )
+        return '-'
+    image_preview.short_description = 'Image'
+    
+    def image_preview_large(self, obj):
+        """Display larger image preview in detail."""
+        if obj.image_cid:
+            url = self._resolve_ipfs_url(obj.image_cid)
+            return format_html(
+                '<img src="{}" style="max-height: 200px; max-width: 300px; object-fit: contain;" /><br/><a href="{}" target="_blank">Open in new tab</a>',
+                url, url
+            )
+        return 'No image'
+    image_preview_large.short_description = 'Image Preview'
+    
+    def banner_preview(self, obj):
+        """Display banner preview."""
+        if obj.banner_cid:
+            url = self._resolve_ipfs_url(obj.banner_cid)
+            return format_html(
+                '<img src="{}" style="max-height: 100px; max-width: 400px; object-fit: contain;" /><br/><a href="{}" target="_blank">Open in new tab</a>',
+                url, url
+            )
+        return 'No banner'
+    banner_preview.short_description = 'Banner Preview'
+    
+    def formatted_raw_json(self, obj):
+        """Pretty-print raw JSON data."""
+        if not obj.raw_json:
+            return 'No raw data'
+        
+        try:
+            formatted = json.dumps(obj.raw_json, indent=2)
+            return format_html(
+                '<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; max-height: 400px; overflow: auto;">{}</pre>',
+                formatted
+            )
+        except (TypeError, ValueError):
+            return format_html(
+                '<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px;">{}</pre>',
+                str(obj.raw_json)
+            )
+    formatted_raw_json.short_description = 'Raw JSON Data'
+    
+    @admin.action(description='Refresh metadata from IPFS')
+    def refresh_metadata_from_ipfs(self, request, queryset):
+        """Refresh metadata for selected campaigns from IPFS."""
+        from core.services.metadata_resolver import MetadataResolver, MetadataFetchError
+        
+        resolver = MetadataResolver()
+        success_count = 0
+        error_count = 0
+        
+        for metadata in queryset:
+            try:
+                resolver.refresh(metadata.campaign.address)
+                success_count += 1
+            except MetadataFetchError as e:
+                logger.error(f"Failed to refresh metadata for {metadata.campaign.address}: {e}")
+                error_count += 1
+        
+        if success_count > 0:
+            self.message_user(request, f'Successfully refreshed {success_count} metadata record(s).')
+        if error_count > 0:
+            self.message_user(request, f'Failed to refresh {error_count} metadata record(s).', level='ERROR')
+    
+    @admin.action(description='Clear metadata cache (delete selected)')
+    def clear_metadata_cache(self, request, queryset):
+        """Delete selected metadata records (they can be re-fetched later)."""
+        count = queryset.count()
+        queryset.delete()
+        self.message_user(request, f'Cleared {count} metadata record(s) from cache.')
 

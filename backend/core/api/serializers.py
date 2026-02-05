@@ -1,8 +1,9 @@
 """DRF serializers for blockchain models."""
 
 import json
+from django.conf import settings
 from rest_framework import serializers
-from core.models import Chain, SyncState, Campaign, Contribution, Event
+from core.models import Chain, SyncState, Campaign, Contribution, Event, CampaignMetadata
 from core.utils.formatting import wei_to_eth, timestamp_to_datetime, format_address
 
 
@@ -204,4 +205,124 @@ class CampaignDetailSerializer(CampaignSerializer):
     
     def get_events_count(self, obj):
         return obj.events.count()
+
+
+# =============================================================================
+# Campaign Metadata Serializers
+# =============================================================================
+
+class CampaignMetadataSerializer(serializers.ModelSerializer):
+    """Serializer for CampaignMetadata model."""
+    
+    # Computed IPFS gateway URLs
+    image_url = serializers.SerializerMethodField()
+    banner_url = serializers.SerializerMethodField()
+    creator_avatar_url = serializers.SerializerMethodField()
+    
+    # Campaign address
+    campaign_address = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = CampaignMetadata
+        fields = [
+            'id',
+            'campaign_address',
+            'cid',
+            'name',
+            'description',
+            'short_description',
+            'image_cid',
+            'image_url',
+            'banner_cid',
+            'banner_url',
+            'category',
+            'tags',
+            'location',
+            'creator_name',
+            'creator_avatar_cid',
+            'creator_avatar_url',
+            'website_url',
+            'twitter_handle',
+            'discord_url',
+            'ipfs_fetched_at',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = fields
+    
+    def _get_gateway_url(self) -> str:
+        """Get the IPFS gateway URL from settings."""
+        gateway = getattr(settings, 'IPFS_GATEWAY_URL', 'https://ipfs.io/ipfs/')
+        if not gateway.endswith('/'):
+            gateway += '/'
+        return gateway
+    
+    def _resolve_ipfs_url(self, cid: str) -> str | None:
+        """Resolve an IPFS CID to a gateway URL."""
+        if not cid:
+            return None
+        # Handle ipfs:// URLs
+        if cid.startswith('ipfs://'):
+            cid = cid[7:]
+        return f"{self._get_gateway_url()}{cid}"
+    
+    def get_campaign_address(self, obj):
+        return format_address(obj.campaign.address)
+    
+    def get_image_url(self, obj):
+        return self._resolve_ipfs_url(obj.image_cid)
+    
+    def get_banner_url(self, obj):
+        return self._resolve_ipfs_url(obj.banner_cid)
+    
+    def get_creator_avatar_url(self, obj):
+        return self._resolve_ipfs_url(obj.creator_avatar_cid)
+
+
+class CampaignMetadataSummarySerializer(serializers.ModelSerializer):
+    """Lightweight serializer for metadata when nested in campaign responses."""
+    
+    image_url = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = CampaignMetadata
+        fields = [
+            'name',
+            'short_description',
+            'image_url',
+            'category',
+        ]
+        read_only_fields = fields
+    
+    def _get_gateway_url(self) -> str:
+        gateway = getattr(settings, 'IPFS_GATEWAY_URL', 'https://ipfs.io/ipfs/')
+        if not gateway.endswith('/'):
+            gateway += '/'
+        return gateway
+    
+    def get_image_url(self, obj):
+        if not obj.image_cid:
+            return None
+        cid = obj.image_cid
+        if cid.startswith('ipfs://'):
+            cid = cid[7:]
+        return f"{self._get_gateway_url()}{cid}"
+
+
+class CampaignWithMetadataSerializer(CampaignSerializer):
+    """Campaign serializer that includes nested metadata."""
+    
+    metadata = CampaignMetadataSummarySerializer(read_only=True)
+    
+    class Meta(CampaignSerializer.Meta):
+        fields = CampaignSerializer.Meta.fields + ['metadata']
+
+
+class CampaignDetailWithMetadataSerializer(CampaignDetailSerializer):
+    """Campaign detail serializer that includes full metadata."""
+    
+    metadata = CampaignMetadataSerializer(read_only=True)
+    
+    class Meta(CampaignDetailSerializer.Meta):
+        fields = CampaignDetailSerializer.Meta.fields + ['metadata']
 

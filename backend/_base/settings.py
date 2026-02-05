@@ -3,6 +3,7 @@ Django settings for _base project.
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -30,6 +31,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # Third party
     'rest_framework',
+    'rest_framework_simplejwt',
     'django_filters',
     'drf_spectacular',
     'corsheaders',
@@ -119,6 +121,52 @@ REST_FRAMEWORK = {
         'rest_framework.filters.SearchFilter',
     ],
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    # Authentication
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    # Default permission is AllowAny for public read access
+    # Protected endpoints override this with IsAuthenticated
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',
+    ],
+    # Throttling (rate limiting)
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': os.getenv('RATE_LIMIT_ANON', '100/minute'),
+        'user': os.getenv('RATE_LIMIT_USER', '1000/minute'),
+    },
+}
+
+# Simple JWT settings
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(
+        minutes=int(os.getenv('JWT_ACCESS_TOKEN_LIFETIME_MINUTES', 60))
+    ),
+    'REFRESH_TOKEN_LIFETIME': timedelta(
+        days=int(os.getenv('JWT_REFRESH_TOKEN_LIFETIME_DAYS', 7))
+    ),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
+    
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'VERIFYING_KEY': None,
+    'AUDIENCE': None,
+    'ISSUER': None,
+    
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+    
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
+    'TOKEN_TYPE_CLAIM': 'token_type',
 }
 
 # drf-spectacular settings
@@ -140,4 +188,13 @@ CORS_ALLOWED_ORIGINS = [
 CORS_ALLOW_CREDENTIALS = True
 
 # Admin site customization (applied in core/admin.py)
+
+# =============================================================================
+# IPFS Configuration
+# =============================================================================
+IPFS_GATEWAY_URL = os.getenv('IPFS_GATEWAY_URL', 'https://ipfs.io/ipfs/')
+IPFS_FETCH_TIMEOUT = int(os.getenv('IPFS_FETCH_TIMEOUT', 30))
+
+# Metadata cache duration in hours
+METADATA_CACHE_DURATION_HOURS = int(os.getenv('METADATA_CACHE_DURATION_HOURS', 24))
 

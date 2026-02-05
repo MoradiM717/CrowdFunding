@@ -2,7 +2,8 @@
 
 import django_filters
 from django.db import models
-from core.models import Campaign, Event
+from django.db.models import Q
+from core.models import Campaign, Event, CampaignMetadata
 
 
 class CampaignFilter(django_filters.FilterSet):
@@ -35,6 +36,19 @@ class CampaignFilter(django_filters.FilterSet):
     deadline_before = django_filters.NumberFilter(field_name='deadline_ts', lookup_expr='lte')
     deadline_after = django_filters.NumberFilter(field_name='deadline_ts', lookup_expr='gte')
     
+    # Metadata-based filters
+    category = django_filters.ChoiceFilter(
+        field_name='metadata__category',
+        choices=CampaignMetadata.CATEGORY_CHOICES,
+        method='filter_by_category'
+    )
+    
+    # Full-text search on metadata name and description
+    q = django_filters.CharFilter(method='filter_search')
+    
+    # Has metadata filter
+    has_metadata = django_filters.BooleanFilter(method='filter_has_metadata')
+    
     class Meta:
         model = Campaign
         fields = [
@@ -46,8 +60,50 @@ class CampaignFilter(django_filters.FilterSet):
             'min_raised',
             'has_withdrawn',
             'deadline_before',
-            'deadline_after'
+            'deadline_after',
+            'category',
+            'q',
+            'has_metadata',
         ]
+    
+    def filter_by_category(self, queryset, name, value):
+        """Filter campaigns by metadata category."""
+        if not value:
+            return queryset
+        return queryset.filter(metadata__category__iexact=value)
+    
+    def filter_search(self, queryset, name, value):
+        """Full-text search across campaign fields and metadata.
+        
+        Searches:
+        - Campaign address
+        - Campaign CID
+        - Metadata name (case-insensitive)
+        - Metadata description (case-insensitive)
+        - Metadata short_description (case-insensitive)
+        - Creator name (case-insensitive)
+        """
+        if not value:
+            return queryset
+        
+        search_query = Q(address__icontains=value) | Q(cid__icontains=value)
+        
+        # Search in metadata fields
+        search_query |= Q(metadata__name__icontains=value)
+        search_query |= Q(metadata__description__icontains=value)
+        search_query |= Q(metadata__short_description__icontains=value)
+        search_query |= Q(metadata__creator_name__icontains=value)
+        search_query |= Q(metadata__location__icontains=value)
+        
+        return queryset.filter(search_query).distinct()
+    
+    def filter_has_metadata(self, queryset, name, value):
+        """Filter campaigns that have/don't have cached metadata."""
+        if value is None:
+            return queryset
+        if value:
+            return queryset.filter(metadata__isnull=False)
+        return queryset.filter(metadata__isnull=True)
 
 
 class EventFilter(django_filters.FilterSet):

@@ -1,23 +1,35 @@
 """API views for blockchain models."""
 
+import logging
 import re
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404
 from django.db.models import Q, Prefetch
-from core.models import Chain, SyncState, Campaign, Contribution, Event
+from core.models import Chain, SyncState, Campaign, Contribution, Event, CampaignMetadata
 from core.api.serializers import (
     ChainSerializer,
     SyncStateSerializer,
     CampaignSerializer,
     CampaignDetailSerializer,
+    CampaignDetailWithMetadataSerializer,
+    CampaignWithMetadataSerializer,
     ContributionSerializer,
     ContributionWithCampaignSerializer,
-    EventSerializer
+    EventSerializer,
+    CampaignMetadataSerializer,
 )
 from core.api.filters import CampaignFilter, EventFilter
+from core.services.metadata_resolver import (
+    MetadataResolver,
+    CampaignNotFoundError,
+    MetadataFetchError,
+)
+
+logger = logging.getLogger(__name__)
 
 
 # Ethereum address validation regex
@@ -59,14 +71,29 @@ class CampaignViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = 'address'
     
     def get_serializer_class(self):
-        """Use detail serializer for retrieve action."""
+        """Use appropriate serializer based on action and query params."""
+        include_metadata = self.request.query_params.get('include_metadata', '').lower() == 'true'
+        
         if self.action == 'retrieve':
+            if include_metadata:
+                return CampaignDetailWithMetadataSerializer
             return CampaignDetailSerializer
+        
+        if self.action == 'list' and include_metadata:
+            return CampaignWithMetadataSerializer
+        
         return CampaignSerializer
     
     def get_queryset(self):
-        """Optimize queryset with select_related."""
-        return Campaign.objects.all().select_related()
+        """Optimize queryset with select_related and prefetch_related."""
+        qs = Campaign.objects.all().select_related()
+        
+        # Prefetch metadata if requested
+        include_metadata = self.request.query_params.get('include_metadata', '').lower() == 'true'
+        if include_metadata:
+            qs = qs.prefetch_related('metadata')
+        
+        return qs
     
     @action(detail=True, methods=['get'])
     def contributions(self, request, address=None):
@@ -113,6 +140,65 @@ class CampaignViewSet(viewsets.ReadOnlyModelViewSet):
         
         serializer = EventSerializer(events, many=True)
         return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'], url_path='metadata')
+    def metadata(self, request, address=None):
+        """Get cached metadata for a campaign.
+        
+        Returns cached IPFS metadata if available.
+        Does not fetch from IPFS - use metadata_refresh for that.
+        """
+        campaign = self.get_object()
+        
+        try:
+            metadata = CampaignMetadata.objects.select_related('campaign').get(
+                campaign=campaign
+            )
+            serializer = CampaignMetadataSerializer(metadata)
+            return Response(serializer.data)
+        except CampaignMetadata.DoesNotExist:
+            return Response(
+                {
+                    'detail': 'Metadata not cached for this campaign.',
+                    'has_cid': bool(campaign.cid),
+                    'cid': campaign.cid,
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    @action(detail=True, methods=['post'], url_path='metadata/refresh')
+    def metadata_refresh(self, request, address=None):
+        """Refresh metadata from IPFS.
+        
+        Fetches metadata from IPFS and updates the cache.
+        This endpoint may be rate-limited or require authentication.
+        """
+        campaign = self.get_object()
+        
+        if not campaign.cid:
+            return Response(
+                {'detail': 'Campaign has no IPFS CID.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            resolver = MetadataResolver()
+            metadata = resolver.refresh(campaign.address)
+            
+            if metadata:
+                serializer = CampaignMetadataSerializer(metadata)
+                return Response(serializer.data)
+            
+            return Response(
+                {'detail': 'Failed to fetch metadata from IPFS.'},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+        except MetadataFetchError as e:
+            logger.error(f"Failed to refresh metadata for {address}: {e}")
+            return Response(
+                {'detail': f'Failed to fetch metadata: {str(e)}'},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
 
 
 class CreatorCampaignsView(APIView):
