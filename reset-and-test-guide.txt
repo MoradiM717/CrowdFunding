@@ -1,0 +1,253 @@
+=============================================================================
+                    COMPLETE RESET AND TEST GUIDE
+=============================================================================
+
+This guide will help you:
+1. Reset the database (truncate all data)
+2. Purge RabbitMQ queues
+3. Deploy fresh contracts on Hardhat
+4. Test the indexer (producer + consumer)
+
+=============================================================================
+STEP 1: STOP ALL RUNNING PROCESSES
+=============================================================================
+
+Stop any running:
+- Producer (Ctrl+C)
+- Consumer (Ctrl+C)
+- Hardhat node (Ctrl+C) - we'll restart it
+
+=============================================================================
+STEP 2: RESET THE DATABASE
+=============================================================================
+
+Connect to PostgreSQL:
+    psql -h localhost -p 5437 -U crowdfunding -d crowdfunding_app
+
+Run these SQL commands (copy-paste all at once):
+
+-- Truncate all indexer tables (order matters due to foreign keys)
+TRUNCATE TABLE contributions CASCADE;
+TRUNCATE TABLE events CASCADE;
+TRUNCATE TABLE campaigns CASCADE;
+TRUNCATE TABLE sync_state CASCADE;
+
+-- Verify tables are empty
+SELECT 'events' as table_name, COUNT(*) FROM events
+UNION ALL SELECT 'campaigns', COUNT(*) FROM campaigns
+UNION ALL SELECT 'contributions', COUNT(*) FROM contributions
+UNION ALL SELECT 'sync_state', COUNT(*) FROM sync_state;
+
+-- Verify chains table still has Hardhat entry
+SELECT * FROM chains WHERE chain_id = 31337;
+
+-- If chains is empty, insert it:
+-- INSERT INTO chains (name, chain_id, rpc_url) VALUES ('Hardhat Local', 31337, 'http://127.0.0.1:8545');
+
+-- Exit psql
+\q
+
+=============================================================================
+STEP 3: PURGE RABBITMQ QUEUES
+=============================================================================
+
+cd indexer
+python -m indexer broker purge
+
+# Or manually via RabbitMQ Management UI:
+# http://localhost:15672 (guest/guest)
+# Go to Queues tab -> Select each queue -> Purge
+
+=============================================================================
+STEP 4: START HARDHAT NODE (FRESH)
+=============================================================================
+
+# Terminal 1: Start Hardhat node
+cd smartcontract
+npx hardhat node
+
+# Wait for it to start and show test accounts
+
+=============================================================================
+STEP 5: DEPLOY CONTRACTS
+=============================================================================
+
+# Terminal 2: Deploy the CampaignFactory contract
+cd smartcontract
+npx hardhat run scripts/deploy.ts --network localhost
+
+# Note the Factory address (e.g., 0x5FbDB2315678afecb367f032d93F642f64180aa3)
+# This should be consistent if it's the first deployment on fresh Hardhat
+
+=============================================================================
+STEP 6: START THE PRODUCER
+=============================================================================
+
+# Terminal 3: Run producer
+cd indexer
+python -m indexer producer run
+
+# You should see:
+# - "Starting producer..."
+# - "Processed blocks X to Y, published 0 events" (no events yet)
+
+=============================================================================
+STEP 7: START THE CONSUMER
+=============================================================================
+
+# Terminal 4: Run consumer
+cd indexer
+python -m indexer consumer run
+
+# You should see:
+# - "Consumer started, waiting for messages..."
+
+=============================================================================
+STEP 8: CREATE A CAMPAIGN (Generate CampaignCreated Event)
+=============================================================================
+
+# Terminal 2: Create a new campaign
+cd smartcontract
+npx hardhat run scripts/create-campaign.ts --network localhost
+
+# Note the campaign address from the output!
+# Example: Campaign deployed at: 0x...
+
+# Watch Terminal 3 (Producer): Should show "published 1 events"
+# Watch Terminal 4 (Consumer): Should show "Created campaign: 0x..."
+
+=============================================================================
+STEP 9: VERIFY DATABASE
+=============================================================================
+
+psql -h localhost -p 5437 -U crowdfunding -d crowdfunding_app
+
+-- Check campaigns
+SELECT address, creator_address, status, goal_wei, total_raised_wei FROM campaigns;
+
+-- Check events
+SELECT event_name, address, block_number, tx_hash FROM events;
+
+-- Check sync_state
+SELECT * FROM sync_state;
+
+\q
+
+=============================================================================
+STEP 10: TEST DONATION (Generate DonationReceived Event)
+=============================================================================
+
+# Set the campaign address from Step 8
+export CAMPAIGN_ADDRESS="0xYourCampaignAddressHere"
+
+# Donate 0.5 ETH
+cd smartcontract
+npx hardhat run scripts/donate.ts --network localhost
+
+# Or with custom amount:
+# CAMPAIGN_ADDRESS=0x... AMOUNT=1.0 npx hardhat run scripts/donate.ts --network localhost
+
+# Watch the logs - should see DonationReceived processed
+
+=============================================================================
+STEP 11: VERIFY CONTRIBUTION IN DATABASE
+=============================================================================
+
+psql -h localhost -p 5437 -U crowdfunding -d crowdfunding_app
+
+-- Check contributions
+SELECT * FROM contributions;
+
+-- Check updated campaign totals
+SELECT address, total_raised_wei, status FROM campaigns;
+
+\q
+
+=============================================================================
+FULL WORKFLOW TEST (ALL EVENTS)
+=============================================================================
+
+# 1. Create campaign
+cd smartcontract
+npx hardhat run scripts/create-campaign.ts --network localhost
+# Note: CAMPAIGN_ADDRESS from output
+
+# 2. Donate to reach goal (goal is 10 ETH by default)
+export CAMPAIGN_ADDRESS="0x..."
+AMOUNT=5.0 npx hardhat run scripts/donate.ts --network localhost
+AMOUNT=6.0 npx hardhat run scripts/donate.ts --network localhost
+
+# 3. Withdraw (after goal is met)
+npx hardhat run scripts/withdraw.ts --network localhost
+
+# 4. Check final database state
+psql -h localhost -p 5437 -U crowdfunding -d crowdfunding_app -c "
+SELECT 
+    c.address,
+    c.status,
+    c.goal_wei,
+    c.total_raised_wei,
+    c.withdrawn,
+    (SELECT COUNT(*) FROM contributions WHERE campaign_address = c.address) as num_donors
+FROM campaigns c;
+"
+
+=============================================================================
+REFUND TEST (Requires failed campaign)
+=============================================================================
+
+# 1. Create a short-deadline campaign
+cd smartcontract
+npx hardhat run scripts/create-short-campaign.ts --network localhost
+# Note: SHORT_CAMPAIGN_ADDRESS from output
+
+# 2. Donate less than goal
+export CAMPAIGN_ADDRESS="0x..."  # the short campaign address
+AMOUNT=0.1 npx hardhat run scripts/donate.ts --network localhost
+
+# 3. Wait 60+ seconds for deadline to pass
+sleep 65
+
+# 4. Request refund
+npx hardhat run scripts/refund.ts --network localhost
+
+=============================================================================
+TROUBLESHOOTING
+=============================================================================
+
+If events are not being processed:
+
+1. Check producer is running and publishing events:
+   - Look for "published X events" in producer logs
+
+2. Check consumer is connected:
+   - Look for "Consumer started" message
+
+3. Check RabbitMQ has messages:
+   - http://localhost:15672 (guest/guest)
+   - Check queue message counts
+
+4. Check database for errors:
+   psql -h localhost -p 5437 -U crowdfunding -d crowdfunding_app
+   SELECT * FROM events ORDER BY created_at DESC LIMIT 5;
+   SELECT * FROM campaigns;
+
+5. Check consumer logs for errors:
+   - Look for "FOREIGN KEY ERROR" messages
+   - Look for "Event already exists" messages
+
+6. If sync_state is ahead of Hardhat:
+   UPDATE sync_state SET last_block = 0 WHERE chain_id = 31337;
+
+=============================================================================
+HARDHAT TEST ACCOUNTS (for reference)
+=============================================================================
+
+Account #0: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 (10000 ETH)
+Account #1: 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 (10000 ETH)
+Account #2: 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC (10000 ETH)
+
+Private Key #0: 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+Private Key #1: 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+
+=============================================================================

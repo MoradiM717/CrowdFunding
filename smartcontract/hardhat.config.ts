@@ -1,4 +1,5 @@
 import "@nomicfoundation/hardhat-toolbox-mocha-ethers";
+import "@nomicfoundation/hardhat-ethers";
 import { HardhatUserConfig } from "hardhat/config";
 
 const config: HardhatUserConfig = {
@@ -12,14 +13,9 @@ const config: HardhatUserConfig = {
     },
   },
   networks: {
-    hardhat: {
-      chainId: 1337,
-      type: "http",
-      url: "http://127.0.0.1:8545",
-    },
     localhost: {
       url: "http://127.0.0.1:8545",
-      type: "http",
+      chainId: 31337,
     },
   },
   paths: {

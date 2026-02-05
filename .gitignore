@@ -1,0 +1,122 @@
+# ========================================
+# Node.js / Hardhat (smartcontract/)
+# ========================================
+node_modules/
+package-lock.json
+
+# Hardhat artifacts
+cache/
+artifacts/
+typechain/
+typechain-types/
+
+# Hardhat coverage
+coverage/
+coverage.json
+
+# Remix IDE (if used)
+smartcontract/.deps/
+smartcontract/.states/
+
+# ========================================
+# Python (backend/ & indexer/)
+# ========================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+.backend/
+.indexer/
+*.egg-info/
+.eggs/
+
+# Distribution / packaging
+dist/
+build/
+*.egg
+
+# Testing
+.pytest_cache/
+.tox/
+.nox/
+htmlcov/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Django
+*.log
+db.sqlite3
+staticfiles/
+media/
+
+# ========================================
+# Environment Variables (IMPORTANT)
+# ========================================
+.env
+.env.local
+.env.*.local
+.env.development
+.env.test
+.env.production
+
+# Keep .env.example files (they are templates)
+!.env.example
+!**/.env.example
+
+# ========================================
+# IDE / Editor
+# ========================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ========================================
+# Operating System
+# ========================================
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ========================================
+# Logs
+# ========================================
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ========================================
+# Project-specific exclusions
+# ========================================
+
+# Personal/temporary folders
+/stuff-crowd-funding/
+
+# Cursor/AI assistant files (auto-generated)
+agent-transcripts/
+
+# Temporary test/debug files
+*.tmp
+*.temp
